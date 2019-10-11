@@ -30,77 +30,80 @@ def m_kron(A):
         N = np.kron(N, A[i])
     return N
 
-def generate_initial():
-    # eventually make this read in a file of some kind.
-    global J
-    spins.append(50)
-    spins.append(100)
-    spins.append(200)
-    num_spins = len(spins)
-    J = np.zeros((len(spins), len(spins)))
-    J[0, 1] = 1 # only do one (so no 1,0)
-    J[0, 2] = 0
-    J[1, 2] = 1
-    print(J)
 
-    
-def operator(A):
-    # A is a list of lists, each submember containing [spin, operator]. 
-    # For example, Iz on spin 1 would be [[1, Iz]]. 
-    L = []
-    for i in spins:
-        L.append(E)
-    for i in A:
-        L[i[0]] = i[1]
-    return m_kron(L)
-
-def gen_hamiltonian():
-    global J
-    ham = 0
-    for i in range(0, len(spins)):
-        ham = ham + spins[i] * operator([[i, Iz]])
-    print(J)
-    for (x,y), v in np.ndenumerate(J):
-        ham = ham + 2 * np.pi * v * (operator([[x, Ix], [y, Ix]]) + operator([[x, Iy], [y, Iy]]) + operator([[x, Iz], [y, Iz]]))
-        print("Added %d-%d %d" % (x, y, v))
-    return ham
 
 def gen_expm(H, t):
     # t can be either time (for Hamiltonian evolution) or pulse angle (eg for x pulse)
     factor = 1j * t * H
     return [expm(-factor), expm(factor)]
 
-def apply_expm(P, ex):
-    return np.matmul(np.matmul(ex[0], P), ex[1])
+class NMR_Experiment:
+    spins = []
+    num_spins = 0
+    J = 0
+    P = 0
+    def __init__(self):
+        # eventually make this read in a file of some kind.
+        self.spins.append(60)
+        self.spins.append(120)
+        self.spins.append(180)
+        self.num_spins = len(self.spins)
+        self.J = np.zeros((len(self.spins), len(self.spins)))
+        self.J[0, 1] = 3 # only do one (so no 1,0)
+        self.J[0, 2] = 0
+        self.J[1, 2] = 1
 
-def apply_operator(P, Op, t):
-    l = gen_expm(Op, t)
-    return apply_expm(P, l)
+    def operator(self, A):
+        # A is a list of lists, each submember containing [spin, operator]. 
+        # For example, Iz on spin 1 would be [[1, Iz]]. 
+        L = []
+        for i in self.spins:
+            L.append(E)
+        for i in A:
+            L[i[0]] = i[1]
+        return m_kron(L)
+
+    def gen_hamiltonian(self):
+        ham = 0
+        for i in range(0, len(self.spins)):
+            ham = ham + self.spins[i] * self.operator([[i, Iz]])
+        for (x,y), v in np.ndenumerate(self.J):
+            ham = ham + 2 * np.pi * v * (self.operator([[x, Ix], [y, Ix]]) + self.operator([[x, Iy], [y, Iy]]) + self.operator([[x, Iz], [y, Iz]]))
+            print("Added %d-%d %d" % (x, y, v))
+        return ham
+
+    def apply_expm(self, ex):
+        self.P = np.matmul(np.matmul(ex[0], self.P), ex[1])
+        return self.P
+
+    def apply_operator(self, Op, t):
+        l = gen_expm(Op, t)
+        return self.apply_expm(l)
 
 Xmag = np.array(())
 Ymag = np.array(())
 time = np.array(())
 
-generate_initial()
-p = 0
-for i in range(0, len(spins)):
-    p = p + operator([[i, Iz]]) # initially have both spins along z
-for i in range(0, len(spins)):
-    p = apply_operator(p, operator([[i, Ix]]), np.pi/2)
-effective_hamiltonian = gen_hamiltonian()
+penguin = NMR_Experiment()
 
+for i in range(0, len(penguin.spins)):
+    penguin.P = penguin.P + penguin.operator([[i, Iz]]) # initially have both spins along z
+for i in range(0, len(penguin.spins)):
+    penguin.apply_operator(penguin.operator([[i, Ix]]), np.pi/2)
+effective_hamiltonian = penguin.gen_hamiltonian()
+print(effective_hamiltonian)
 dt = 1./100
 
 eff_hamiltonian = gen_expm(effective_hamiltonian, dt)
 
 
 for t in range(0, 10000):
-    p = apply_expm(p, eff_hamiltonian)
+    penguin.apply_expm(eff_hamiltonian)
     x = 0
     y = 0
-    for i in range(0, len(spins)):
-        x = x + np.trace(np.matmul(p, operator([[i, Ix]])))
-        y = y + np.trace(np.matmul(p, operator([[i, Iy]])))
+    for i in range(0, len(penguin.spins)):
+        x = x + np.trace(np.matmul(penguin.P, penguin.operator([[i, Ix]])))
+        y = y + np.trace(np.matmul(penguin.P, penguin.operator([[i, Iy]])))
         
     Xmag = np.append(Xmag, x)
     Ymag = np.append(Ymag, y)
