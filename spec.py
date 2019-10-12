@@ -6,8 +6,8 @@ import sys
 import random
 # define standard operators
 
-if (len(sys.argv) <= 2):
-    print("Please enter output filename")
+if (len(sys.argv) <= 4):
+    print("Please enter commands: SIMFILE 1d/2d FIDFILE SPECFILE")
     exit()
 
 Ix = np.array([[0, 0.5], [0.5, 0]])
@@ -249,9 +249,17 @@ class NMR_Experiment:
                 for (x, y), v in np.ndenumerate(FK):
                     f.write("%f, %f, %f\n" % (x, y, v))
 
+filename = sys.argv[1]
 
-penguin = NMR_Experiment("sample_2d.sim")
-penguin.run_2d(1000, 1./100, 1000, 1./100)
-#penguin.acquire(10000, 1./100)
-penguin.output_fid(sys.argv[1])
-penguin.output_spectrum(sys.argv[2], 1./50)
+if (sys.argv[2] == "1d"):
+    penguin = NMR_Experiment(filename)
+    penguin.run()
+    penguin.acquire(10000, 1./100)
+    penguin.output_fid(sys.argv[3])
+    penguin.output_spectrum(sys.argv[4], 1./100)
+else:
+    penguin = NMR_Experiment(filename)
+    penguin.run_2d(1000, 1./100, 1000, 1./100)
+    #penguin.acquire(10000, 1./100)
+    penguin.output_fid(sys.argv[3])
+    penguin.output_spectrum(sys.argv[4], 1./50)
