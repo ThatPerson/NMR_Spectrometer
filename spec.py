@@ -1,6 +1,6 @@
 import scipy as sp
 import numpy as np
-from scipy.linalg import expm 
+from scipy.linalg import expm
 from numpy.fft import fft
 import sys
 # define standard operators
@@ -42,20 +42,32 @@ class NMR_Experiment:
     num_spins = 0
     J = 0
     P = 0
-    def __init__(self):
-        # eventually make this read in a file of some kind.
-        self.spins.append(60)
-        self.spins.append(120)
-        self.spins.append(180)
+    pulse_sequence = []
+    acquire_on = []
+    xmag = []
+    ymag = []
+    time = []
+    def __init__(self, filename):
+        ### files are of the format
+        #SPINS
+        #30
+        #70
+        #JCOUPLINGS
+        #0, 1, 7
+        #SEQUENCE
+        #1.57[0x]
+        #1.57[1x]
+        #ACQ[0,1]
+        self.load_file(filename)
+
         self.num_spins = len(self.spins)
-        self.J = np.zeros((len(self.spins), len(self.spins)))
-        self.J[0, 1] = 3 # only do one (so no 1,0)
-        self.J[0, 2] = 0
-        self.J[1, 2] = 1
+
+
+
 
     def operator(self, A):
-        # A is a list of lists, each submember containing [spin, operator]. 
-        # For example, Iz on spin 1 would be [[1, Iz]]. 
+        # A is a list of lists, each submember containing [spin, operator].
+        # For example, Iz on spin 1 would be [[1, Iz]].
         L = []
         for i in self.spins:
             L.append(E)
@@ -69,7 +81,6 @@ class NMR_Experiment:
             ham = ham + self.spins[i] * self.operator([[i, Iz]])
         for (x,y), v in np.ndenumerate(self.J):
             ham = ham + 2 * np.pi * v * (self.operator([[x, Ix], [y, Ix]]) + self.operator([[x, Iy], [y, Iy]]) + self.operator([[x, Iz], [y, Iz]]))
-            print("Added %d-%d %d" % (x, y, v))
         return ham
 
     def apply_expm(self, ex):
@@ -80,43 +91,107 @@ class NMR_Experiment:
         l = gen_expm(Op, t)
         return self.apply_expm(l)
 
-Xmag = np.array(())
-Ymag = np.array(())
-time = np.array(())
+    def load_file(self, filename):
+        mode = 0
+        with open(filename, 'r') as fi:
+            for i in fi:
+                line = i.strip().replace(' ', '')
+                if (line == "SPINS"):
+                    mode = 0
+                elif (line == "JCOUPLINGS"):
+                    mode = 1
+                    self.num_spins = len(self.spins)
+                    self.J = np.zeros((self.num_spins, self.num_spins))
+                    for n in range(0, len(self.spins)):
+                        self.P = self.P + self.operator([[n, Iz]])
+                elif(line == "SEQUENCE"):
+                    mode = 2
+                else:
+                    if (mode == 0):
+                        self.spins.append(float(line))
+                        print("Spin %d: %f" % (len(self.spins) - 1, float(line)))
+                    elif (mode == 1):
+                        p = line.split(",")
+                        if (len(p) < 3):
+                            print("Insufficient arguments for J coupling")
+                        else:
+                            self.J[int(p[0]), int(p[1])] = float(p[2])
+                            print("J Coupling from %d-%d=%fHz" % (int(p[0]), int(p[1]), float(p[2])))
+                    elif (mode == 2):
+                        # of the form T[np, mq]
+                        if (line[:len("ACQ")] == "ACQ"):
+                            k = line[len("ACQ"):].replace("[", "").replace("]", "").split(",")
+                            for l in k:
+                                self.acquire_on.append(int(l))
+                        else:
+                            k = line.split("[")
+                            if (len(k) < 2):
+                                print("Incorrectly formatted pulse")
+                            else:
+                                t = float(k[0])
+                                pl = k[1].replace("]", "")
+                                lp = pl.split(",")
+                                A = [] # becomes [[1, Iz], [2, Iz]] etc
+                                n = []
+                                for kx in lp:
+                                    n = []
+                                    n.append(int(kx[:-1]))
+                                    if (kx[-1] == "x"):
+                                        n.append(Ix)
+                                    elif (kx[-1] == "y"):
+                                        n.append(Iy)
+                                    elif (kx[-1] == "z"):
+                                        n.append(Iz)
+                                    else:
+                                        print("Incorrect pulse")
+                                        continue
+                                    A.append(n)
 
-penguin = NMR_Experiment()
-
-for i in range(0, len(penguin.spins)):
-    penguin.P = penguin.P + penguin.operator([[i, Iz]]) # initially have both spins along z
-for i in range(0, len(penguin.spins)):
-    penguin.apply_operator(penguin.operator([[i, Ix]]), np.pi/2)
-effective_hamiltonian = penguin.gen_hamiltonian()
-print(effective_hamiltonian)
-dt = 1./100
-
-eff_hamiltonian = gen_expm(effective_hamiltonian, dt)
+                                self.pulse_sequence.append(gen_expm(self.operator(A), t))
 
 
-for t in range(0, 10000):
-    penguin.apply_expm(eff_hamiltonian)
-    x = 0
-    y = 0
-    for i in range(0, len(penguin.spins)):
-        x = x + np.trace(np.matmul(penguin.P, penguin.operator([[i, Ix]])))
-        y = y + np.trace(np.matmul(penguin.P, penguin.operator([[i, Iy]])))
-        
-    Xmag = np.append(Xmag, x)
-    Ymag = np.append(Ymag, y)
-    time = np.append(time, t * dt)
+
+    def run(self):
+        # run the pulse sequence
+        for i in self.pulse_sequence:
+            self.apply_expm(i)
+
+    def acquire(self, steps, dt):
+        e_hamiltonian = self.gen_hamiltonian()
+        eff_ham = gen_expm(e_hamiltonian, dt)
+        self.xmag = np.array(())
+        self.ymag = np.array(())
+        self.time = np.array(())
+
+        for t in range(0, steps):
+            self.apply_expm(eff_ham)
+            x = 0
+            y = 0
+            for i in self.acquire_on:
+
+                x = x + np.trace(np.matmul(self.P, self.operator([[i, Ix]])))
+                y = y + np.trace(np.matmul(self.P, self.operator([[i, Iy]])))
+            self.xmag = np.append(self.xmag, x)
+            self.ymag = np.append(self.ymag ,y)
+            self.time = np.append(self.time, t * dt)
+
+    def output_fid(self, fn):
+        with open(fn, "w") as f:
+            for i in range(0, len(self.time)):
+                f.write("%f, %f, %f, %f, %f\n" % (self.time[i],
+                    np.real(self.xmag[i]), np.imag(self.xmag[i]),
+                    np.real(self.ymag[i]), np.imag(self.ymag[i])))
+
+    def output_spectrum(self, fn, dt):
+        FK = np.abs(fft(self.xmag + 1j * self.ymag))
+        freq = np.arange(0, len(self.xmag)) * (1. / (dt * len(self.xmag))) * (50/8.)
+        with open(fn, "w") as f:
+            for i in range(0, len(FK)):
+                f.write("%f, %f\n" % (freq[i], (FK[i])))
 
 
-with open(sys.argv[1], "w") as f:
-    for i in range(0, len(time)):
-        f.write("%f, %f, %f, %f, %f\n" % (time[i], np.real(Xmag[i]), np.imag(Xmag[i]), np.real(Ymag[i]), np.imag(Ymag[i])))
-        
-
-FK = np.abs(fft(Xmag + 1j * Ymag))
-freq = np.arange(0, len(Xmag)) * (1. / (dt * len(Xmag))) * (50/8.)
-with open(sys.argv[2], "w") as f:
-    for i in range(0, len(FK)):
-        f.write("%f, %f\n" % (freq[i], (FK[i])))
+penguin = NMR_Experiment("sample.sim")
+penguin.run()
+penguin.acquire(10000, 1./100)
+penguin.output_fid(sys.argv[1])
+penguin.output_spectrum(sys.argv[2], 1./100)
