@@ -1,8 +1,9 @@
 import scipy as sp
 import numpy as np
 from scipy.linalg import expm
-from numpy.fft import fft
+from numpy.fft import fft, fft2
 import sys
+import random
 # define standard operators
 
 if (len(sys.argv) <= 2):
@@ -47,6 +48,7 @@ class NMR_Experiment:
     xmag = []
     ymag = []
     time = []
+    two_d = -1
     def __init__(self, filename):
         ### files are of the format
         #SPINS
@@ -58,6 +60,7 @@ class NMR_Experiment:
         #1.57[0x]
         #1.57[1x]
         #ACQ[0,1]
+        self.two_d = -1
         self.load_file(filename)
 
         self.num_spins = len(self.spins)
@@ -123,6 +126,8 @@ class NMR_Experiment:
                             k = line[len("ACQ"):].replace("[", "").replace("]", "").split(",")
                             for l in k:
                                 self.acquire_on.append(int(l))
+                        elif (line[:len("MIX")] == "MIX"):
+                            self.two_d = len(self.pulse_sequence)
                         else:
                             k = line.split("[")
                             if (len(k) < 2):
@@ -151,18 +156,21 @@ class NMR_Experiment:
 
 
 
-    def run(self):
+    def run(self, ps = -1):
         # run the pulse sequence
-        for i in self.pulse_sequence:
+        if (ps == -1):
+            ps = self.pulse_sequence
+        for i in ps:
             self.apply_expm(i)
 
-    def acquire(self, steps, dt):
+
+    def acquire(self, steps, dt, retain = 1):
         e_hamiltonian = self.gen_hamiltonian()
         eff_ham = gen_expm(e_hamiltonian, dt)
-        self.xmag = np.array(())
-        self.ymag = np.array(())
-        self.time = np.array(())
-
+        xmag = np.array(())
+        ymag = np.array(())
+        time = np.array(())
+        prior_p = self.P
         for t in range(0, steps):
             self.apply_expm(eff_ham)
             x = 0
@@ -171,27 +179,79 @@ class NMR_Experiment:
 
                 x = x + np.trace(np.matmul(self.P, self.operator([[i, Ix]])))
                 y = y + np.trace(np.matmul(self.P, self.operator([[i, Iy]])))
-            self.xmag = np.append(self.xmag, x)
-            self.ymag = np.append(self.ymag ,y)
-            self.time = np.append(self.time, t * dt)
+            #x = x + random.randint(-10, 10)
+            #y = y + random.randint(-10, 10)
+            xmag = np.append(xmag, x)
+            ymag = np.append(ymag ,y)
+            time = np.append(time, t * dt)
+        self.P = prior_p
+        if (retain == 1):
+            self.xmag = xmag
+            self.ymag = ymag
+            self.time = time
+        return xmag, ymag, time
+
+    def run_2d(self, steps_1, dt_1, steps_2, dt_2, retain = 1):
+        self.run(self.pulse_sequence[:self.two_d])
+        e_hamiltonian = self.gen_hamiltonian()
+        eff_ham_2 = gen_expm(e_hamiltonian, dt_2)
+
+        xmag_l = []
+        ymag_l = []
+        time_l = []
+        prior_p = self.P
+        for t1 in range(0, steps_1):
+            self.P = prior_p
+            eff_ham_1 = gen_expm(e_hamiltonian, dt_1 * t1)
+            self.apply_expm(eff_ham_1)
+            self.run(self.pulse_sequence[self.two_d:])
+            xm, ym, ti = self.acquire(steps_2, dt_2, 0)
+            xmag_l.append(xm)
+            ymag_l.append(ym)
+            time_l.append(ti)
+
+        xmag = np.asarray(xmag_l)
+        ymag = np.asarray(ymag_l)
+        time = np.asarray(time_l)
+        if (retain == 1):
+            print("Retaining...")
+            self.xmag = xmag
+            self.ymag = ymag
+            self.time = time
+        return xmag, ymag, time
 
     def output_fid(self, fn):
-        with open(fn, "w") as f:
-            for i in range(0, len(self.time)):
-                f.write("%f, %f, %f, %f, %f\n" % (self.time[i],
-                    np.real(self.xmag[i]), np.imag(self.xmag[i]),
-                    np.real(self.ymag[i]), np.imag(self.ymag[i])))
+        if (self.two_d == -1):
+            with open(fn, "w") as f:
+                for i in range(0, len(self.time)):
+                    f.write("%f, %f, %f, %f, %f\n" % (self.time[i],
+                        np.real(self.xmag[i]), np.imag(self.xmag[i]),
+                        np.real(self.ymag[i]), np.imag(self.ymag[i])))
+        else:
+            with open(fn, "w") as f:
+                print(self.xmag.shape)
+                for (x,y), v in np.ndenumerate(self.xmag):
+                    f.write("%f, %f, %f, %f, %f, %f\n" % (x, y, np.real(self.xmag[x, y]),
+                            np.imag(self.xmag[x, y]), np.real(self.ymag[x, y]),
+                            np.imag(self.ymag[x, y])))
+
 
     def output_spectrum(self, fn, dt):
-        FK = np.abs(fft(self.xmag + 1j * self.ymag))
-        freq = np.arange(0, len(self.xmag)) * (1. / (dt * len(self.xmag))) * (50/8.)
-        with open(fn, "w") as f:
-            for i in range(0, len(FK)):
-                f.write("%f, %f\n" % (freq[i], (FK[i])))
+        if (self.two_d == -1):
+            FK = np.abs(fft(self.xmag + 1j * self.ymag))
+            freq = np.arange(0, len(self.xmag)) * (1. / (dt * len(self.xmag))) * (50/8.)
+            with open(fn, "w") as f:
+                for i in range(0, len(FK)):
+                    f.write("%f, %f\n" % (freq[i], (FK[i])))
+        else:
+            FK = np.abs(fft2(self.xmag + 1j * self.ymag))
+            with open(fn, "w") as f:
+                for (x, y), v in np.ndenumerate(FK):
+                    f.write("%f, %f, %f\n" % (x, y, v))
 
 
-penguin = NMR_Experiment("sample.sim")
-penguin.run()
-penguin.acquire(10000, 1./100)
+penguin = NMR_Experiment("sample_2d.sim")
+penguin.run_2d(1000, 1./100, 1000, 1./100)
+#penguin.acquire(10000, 1./100)
 penguin.output_fid(sys.argv[1])
-penguin.output_spectrum(sys.argv[2], 1./100)
+penguin.output_spectrum(sys.argv[2], 1./50)
