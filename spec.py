@@ -128,6 +128,12 @@ class NMR_Experiment:
                                 self.acquire_on.append(int(l))
                         elif (line[:len("MIX")] == "MIX"):
                             self.two_d = len(self.pulse_sequence)
+                        elif (line[:len("DELAY")] == "DELAY"):
+                        	# add a time delay
+                        	t_del = float(line[len("DELAY"):])
+                        	e_ham = self.gen_hamiltonian()
+                        	eff_h = gen_expm(e_ham, t_del)
+                        	self.pulse_sequence.append(eff_h)
                         else:
                             k = line.split("[")
                             if (len(k) < 2):
