@@ -16,6 +16,10 @@ Iy = np.array([[0, -0.5j], [0.5j, 0]])
 Iz = np.array([[0.5, 0], [0, -0.5]])
 E = np.eye(2)
 
+T20 = (3 * np.kron(Iz, Iz) - (np.kron(Ix, Ix) + np.kron(Iy, Iy) + np.kron(Iz, Iz)))
+
+
+
 spins = []
 num_spins = 0
 J = []
@@ -51,6 +55,7 @@ class NMR_Experiment:
 	spins = []
 	num_spins = 0
 	J = 0
+	dipolar = []
 	P = 0
 	pulse_sequence = []
 	acquire_on = []
@@ -61,6 +66,7 @@ class NMR_Experiment:
 	spin_rate = 0
 	solid = 0
 	two_d = -1
+	magic_angle = 54.74 * np.pi / 180
 	def __init__(self, filename):
 		### files are of the format
 		#SPINS
@@ -141,7 +147,7 @@ class NMR_Experiment:
 						self.P = self.P + self.operator([[n, Iz]])
 				elif (line == "DIPOLAR"):
 					mode = 3
-					self.dipolar = np.zeros((self.num_spins, self.num_spins))
+					#self.dipolar = np.zeros((self.num_spins, self.num_spins))
 				elif (line[:len("SETTINGS")] == "SETTINGS"):
 					k = line[len("SETTINGS"):]
 					k = k.split("/")
@@ -166,6 +172,7 @@ class NMR_Experiment:
 						if (len(p) < 3):
 							print("Insufficient arguments for J coupling")
 						else:
+							print(self.J)
 							self.J[int(p[0]), int(p[1])] = float(p[2])
 							print("J Coupling from %d-%d=%fHz" % (int(p[0]), int(p[1]), float(p[2])))
 					elif (mode == 3):
@@ -173,7 +180,8 @@ class NMR_Experiment:
 						if (len(p) < 3): # nuc1, nuc2, coupling constant
 							print("Insufficient arguments for dipolar coupling")
 						else:
-							self.dipolar[int(p[0]), int(p[1])] = float(p[2])
+							#self.dipolar[int(p[0]), int(p[1])] = float(p[2])
+							self.dipolar.append([int(p[0]), int(p[1]), float(p[2])])
 							print("Dipolar Coupling from %d-%d=%fHz" % 
 								(int(p[0]), int(p[1]), float(p[2])))
 					elif (mode == 2):
@@ -196,6 +204,7 @@ class NMR_Experiment:
 						else:
 							k = line.split("[")
 							if (len(k) < 2):
+								print(line)
 								print("Incorrectly formatted pulse")
 							else:
 								t = float(k[0])
@@ -228,8 +237,64 @@ class NMR_Experiment:
 		for i in ps:
 			self.apply_expm(i)
 
+	def acquire_solid(self, steps, dt, retain = 1):
+		print("Acquiring solid")
+		base_hamiltonian = self.gen_hamiltonian()
+		xmag = np.zeros(steps)
+		ymag = np.zeros(steps)
+		time = np.zeros(steps)
+		prior_p = self.P
+		
+		for cryst in self.crystallites:
+			A20 = []
+			A2n2_RF = []
+			A2n1_RF = []
+			A20_RF = []
+			A21_RF = []
+			A22_RF = []
+			for dip in self.dipolar:
+				A20.append(dip[2])
+				A2n2_RF.append(dip[2] * wigner.WignerD(2, 0, -2, cryst))
+				A2n1_RF.append(dip[2] * wigner.WignerD(2, 0, -1, cryst))
+				A20_RF.append(dip[2] * wigner.WignerD(2, 0, 0, cryst))
+				A21_RF.append(dip[2] * wigner.WignerD(2, 0, 1, cryst))
+				A22_RF.append(dip[2] * wigner.WignerD(2, 0, 2, cryst))
+			
+			for t in range(0, steps):
+				e_hamiltonian = base_hamiltonian
+				# create the time dependent dipolar hamiltonians
+				rot = -dt * t * self.spin_rate
+				for d in range(0, len(self.dipolar)):
+					A20_LF = A2n2_RF[d] * wigner.WignerD(2, -2, 0, [rot, self.magic_angle, 0])
+					A20_LF += A2n1_RF[d] * wigner.WignerD(2, -2, 0, [rot, self.magic_angle, 0])
+					A20_LF += A20_RF[d] * wigner.WignerD(2, -2, 0, [rot, self.magic_angle, 0])
+					A20_LF += A21_RF[d] * wigner.WignerD(2, -2, 0, [rot, self.magic_angle, 0])
+					A20_LF += A22_RF[d] * wigner.WignerD(2, -2, 0, [rot, self.magic_angle, 0])
+					e_hamiltonian = e_hamiltonian + A20_LF * T20
+				eff_ham = gen_expm(e_hamiltonian, dt)
+				self.apply_expm(eff_ham)
+				x = 0
+				y = 0
+				for i in self.acquire_on:
+					x = x + np.trace(np.matmul(self.P, self.operator([[i, Ix]])))
+					y = y + np.trace(np.matmul(self.P, self.operator([[i, Iy]])))
+				xmag[t] += x
+				ymag[t] += y
+				time[t] = t*dt
+				#xmag = np.append(xmag, x)
+				#ymag = np.append(ymag, y)
+				#time = np.append(time, t*dt)
+			self.P = prior_p
+		if (retain == 1):
+			self.xmag = xmag
+			self.ymag = ymag
+			self.time = time
+		return xmag, ymag, time
 
 	def acquire(self, steps, dt, retain = 1):
+		if (self.solid == 1):
+			return self.acquire_solid(steps, dt, retain)
+
 		e_hamiltonian = self.gen_hamiltonian()
 		eff_ham = gen_expm(e_hamiltonian, dt)
 		xmag = np.array(())
