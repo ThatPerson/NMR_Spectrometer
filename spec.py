@@ -4,6 +4,7 @@ from scipy.linalg import expm
 from numpy.fft import fft, fft2
 import sys
 import random
+import wigner
 # define standard operators
 
 if (len(sys.argv) <= 4):
@@ -38,6 +39,14 @@ def gen_expm(H, t):
 	factor = 1j * t * H
 	return [expm(-factor), expm(factor)]
 
+def isint(x):
+	try:
+		int(x)
+		return 1
+	except:
+		return 0
+
+
 class NMR_Experiment:
 	spins = []
 	num_spins = 0
@@ -48,6 +57,9 @@ class NMR_Experiment:
 	xmag = []
 	ymag = []
 	time = []
+	crystallites = []
+	spin_rate = 0
+	solid = 0
 	two_d = -1
 	def __init__(self, filename):
 		### files are of the format
@@ -65,8 +77,28 @@ class NMR_Experiment:
 
 		self.num_spins = len(self.spins)
 
-
-
+#self.gen_crystallites(int(k[0]))
+#					else:
+#						self.load_crystallites(k[0])
+						
+	def gen_crystallites(self, x):
+		for i in range(0, x):
+			alph = np.pi * random.random()
+			bet = np.arcsin((random.random() * 2) - 1) + np.pi/2
+			gamm = np.pi * random.random()
+			self.crystallites.append([alph, bet, gamm])
+	
+	def load_crystallites(self, f):
+		with open(f, "r") as f:
+			for l in f:
+				try:
+					k = [float(p) for p in l.split(",")]
+				except:
+					print("Error reading")
+					continue
+				if (len(k) != 3):
+					continue
+				self.crystallites.append(k)
 
 	def operator(self, A):
 		# A is a list of lists, each submember containing [spin, operator].
@@ -110,6 +142,19 @@ class NMR_Experiment:
 				elif (line == "DIPOLAR"):
 					mode = 3
 					self.dipolar = np.zeros((self.num_spins, self.num_spins))
+				elif (line[:len("SETTINGS")] == "SETTINGS"):
+					k = line[len("SETTINGS"):]
+					k = k.split("/")
+					if (len(k) != 2):
+						print("Ignoring settings...")
+						continue
+					if (isint(k[0]) == 1):
+						self.gen_crystallites(int(k[0]))
+					else:
+						self.load_crystallites(k[0])
+					self.spin_rate = int(k[1])
+					print("%s/%d" % (k[0], int(k[1])))
+					self.solid = 1
 				elif(line == "SEQUENCE"):
 					mode = 2
 				else:
@@ -125,12 +170,12 @@ class NMR_Experiment:
 							print("J Coupling from %d-%d=%fHz" % (int(p[0]), int(p[1]), float(p[2])))
 					elif (mode == 3):
 						p = line.split(",")
-						if (len(p) < 6): # nuc1, nuc2, coupling constant, alpha, beta, gamma
+						if (len(p) < 3): # nuc1, nuc2, coupling constant
 							print("Insufficient arguments for dipolar coupling")
 						else:
-							self.dipolar[int(p[0]), int(p[1])] = [float(p[2]), float(p[3]), float(p[4]), float(p[5])]
-							print("Dipolar Coupling from %d-%d=%fHz (%f, %f, %f)" % 
-								(int(p[0]), int(p[1]), float(p[2]), float(p[3], float(p[4]), float(p[5]))))
+							self.dipolar[int(p[0]), int(p[1])] = float(p[2])
+							print("Dipolar Coupling from %d-%d=%fHz" % 
+								(int(p[0]), int(p[1]), float(p[2])))
 					elif (mode == 2):
 						# of the form T[np, mq]
 						if (line[:len("ACQ")] == "ACQ"):
@@ -140,6 +185,9 @@ class NMR_Experiment:
 						elif (line[:len("MIX")] == "MIX"):
 							self.two_d = len(self.pulse_sequence)
 						elif (line[:len("DELAY")] == "DELAY"):
+							if (self.solid == 1):
+								print("Error: DELAY not allowed for solid state.")
+								exit()
 							# add a time delay
 							t_del = float(line[len("DELAY"):])
 							e_ham = self.gen_hamiltonian()
